@@ -11,4 +11,6 @@ __pycache__
 save_video
 save_model
 
-.png
+*.png
+/python/QMIX
+/model/*

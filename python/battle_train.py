@@ -9,6 +9,7 @@ import torch.optim as optim
 from battle_env import MAgentBattle
 from agent.agent_rl.agent_rl import AgentRL
 from agent.agent_rule.agent_random import AgentRandom
+from agent.ppo.ppo_agent import MLPActorCritic
 
 
 def parse_args():
@@ -65,6 +66,9 @@ if __name__ == "__main__":
 
     env = MAgentBattle(visualize=False, eval_mode=False, obs_flat=True)
     agent1 = AgentRL(dim_obs=env.dim_obs, dim_action=env.dim_action)
+
+    #agent1 = MLPActorCritic(observation_space=env.dim_obs, action_space=env.dim_action)
+
     agent2 = AgentRandom(num_agent=env.num_agent, dim_obs=env.dim_obs, dim_action=env.dim_action)
 
     num_rl_win = 0
@@ -103,6 +107,7 @@ if __name__ == "__main__":
             obs[step] = next_obs
             dones[step] = next_done
             valids[step] = next_valid
+
 
             #### agent1: RL
             with torch.no_grad():
