@@ -57,16 +57,16 @@ class MLPCritic(nn.Module):
         return torch.squeeze(self.v_net(obs), -1)  # Critical to ensure v has right shape.
 
 
-class MLPActorCritic(nn.Module):
+class AgentPPO(nn.Module):
 
-    def __init__(self, observation_space, action_space,
+    def __init__(self, dim_obs, dim_action,
                  hidden_sizes=(64, 64), activation=nn.Tanh):
         super().__init__()
 
-        obs_dim = observation_space
+        obs_dim = dim_obs
 
         # policy builder depends on action space
-        self.pi = MLPCategoricalActor(obs_dim, action_space, hidden_sizes, activation)
+        self.pi = MLPCategoricalActor(obs_dim, dim_action, hidden_sizes, activation)
 
         # build value function
         self.v = MLPCritic(obs_dim, hidden_sizes, activation)

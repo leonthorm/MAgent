@@ -7,8 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from battle_env import MAgentBattle
-from agent.agent_rl.agent_rl import AgentRL
-from agent.agent_rule.agent_random import AgentRandom
+from agent.agent_rl.agent_rl import AgentRL  # Import your AgentRL class here
 from agent.ppo.ppo_agent import AgentPPO
 
 
@@ -25,7 +24,7 @@ def parse_args():
     # Algorithm specific arguments
     parser.add_argument("--num-envs", type=int, default=5,
                         help="the number of parallel game environments")
-    parser.add_argument("--num-steps", type=int, default=128,
+    parser.add_argument("--num-steps", type=int, default=100,
                         help="the number of steps to run in each environment per policy rollout")
     parser.add_argument("--anneal-lr", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
                         help="Toggle learning rate annealing for policy and value networks")
@@ -35,9 +34,9 @@ def parse_args():
                         help="the discount factor gamma")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="the lambda for the general advantage estimation")
-    parser.add_argument("--num-minibatches", type=int, default=2,
+    parser.add_argument("--num-minibatches", type=int, default=16,
                         help="the number of mini-batches")
-    parser.add_argument("--update-epochs", type=int, default=2,
+    parser.add_argument("--update-epochs", type=int, default=4,
                         help="the K epochs to update the policy")
     parser.add_argument("--norm-adv", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
                         help="Toggles advantages normalization")
@@ -65,12 +64,13 @@ if __name__ == "__main__":
     args = parse_args()
 
     env = MAgentBattle(visualize=False, eval_mode=False, obs_flat=True)
+    
+    # Create two instances of AgentRL for self-play
+    
     agent1 = AgentPPO(dim_obs=env.dim_obs, dim_action=env.dim_action)
-
-    agent2 = AgentRandom(num_agent=env.num_agent, dim_obs=env.dim_obs, dim_action=env.dim_action)
+    agent2 = AgentRL(dim_obs=env.dim_obs, dim_action=env.dim_action)
 
     num_rl_win = 0
-    num_random_win = 0
     num_game = 0
 
     (obs1, obs2), done, (valid1, valid2) = env.reset()
@@ -113,24 +113,24 @@ if __name__ == "__main__":
             actions[step] = torch.nn.functional.one_hot(action1, env.dim_action).to(torch.float32)
             logprobs[step] = logprob
 
-            #### agent2: Random
-            action2 = agent2.get_action(obs2)
+            #### agent2: RL
+            with torch.no_grad():
+                action2, _, _, _ = agent2.get_action_and_value(next_obs)
 
             #### Environment step
             (obs1, obs2), (reward1, reward2), (done1, done2, done_env), (valid1, valid2) = \
-                env.step(action1.cpu().numpy().astype(np.int32), action2)
+                env.step(action1.cpu().numpy().astype(np.int32), action2.cpu().numpy().astype(np.int32))
             if done_env:
                 num_game += 1
 
                 if len(obs1[1]) > len(obs2[1]):
-                    winstr = 'PPO Win'
+                    winstr = 'RL Win'
                     num_rl_win += 1
                 elif len(obs1[1]) < len(obs2[1]):
-                    winstr = 'Random Win'
-                    num_random_win += 1
+                    winstr = 'Self-play Win'
                 else:
                     winstr = 'Draw'
-                print(f'RL win: {num_rl_win / num_game:.3f} | Random win: {num_random_win / num_game:.3f}')
+                print(f'ppo win: {num_rl_win / num_game:.3f} | rl win: {1 - num_rl_win / num_game:.3f}')
                 # print(action1)
                 (obs1, obs2), (_, _, _), (_, _) = env.reset()
             rewards[step][torch.tensor(valid1, dtype=torch.bool)] = torch.tensor(reward1).view(-1)
@@ -185,8 +185,7 @@ if __name__ == "__main__":
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue = agent1.get_action_and_value(b_obs[mb_inds],
-                                                                               torch.argmax(b_actions.long()[mb_inds],
-                                                                                            dim=1))
+                                                                               torch.argmax(b_actions.long()[mb_inds], dim=1))
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -194,42 +193,4 @@ if __name__ == "__main__":
                     # calculate approx_kl http://joschu.net/blog/kl-approx.html
                     old_approx_kl = (-logratio).mean()
                     approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
-
-                mb_advantages = b_advantages[mb_inds]
-                if args.norm_adv:
-                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-                # Policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-                # Value loss
-                newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
-                else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
-
-                entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-
-                optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(agent1.parameters(), args.max_grad_norm)
-                optimizer.step()
-
-            if args.target_kl is not None:
-                if approx_kl > args.target_kl:
-                    break
-
-    env.close()
+                    clipfracs
